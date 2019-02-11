@@ -228,6 +228,7 @@ function MoySklad_CreateSale($tmp='',$retailstoreId='',$saleId=0,$product='',$pr
   $p['assortment']['meta']['mediaType'] = 'application/json';
   $data['positions'][] = $p;
   if (!$cashSum && !$noCashSum) $cashSum = $price;    // если не указана разбивка на нал/безнал, то считаем всю сумму наличными 
+  $noCashSum = $price - $cashSum;
   if ($cashSum) $data['cashSum'] = $cashSum;
   if ($noCashSum) $data['noCashSum'] = $noCashSum;
   $data['cheque']['online'] = true;
