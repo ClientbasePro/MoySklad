@@ -211,18 +211,4 @@ function MoySklad_CreateSale($tmp='',$retailstoreId='',$saleId=0,$price=0,$cashS
 }
 
 
-?> 
-
-
-
-
-
-
-
-
-
-
-
-
-
 ?>
