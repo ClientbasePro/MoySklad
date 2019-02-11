@@ -35,7 +35,8 @@ function MoySklad_GetRetailstoreToken($retailstoreId='') {
   curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
   curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
   curl_setopt($curl, CURLOPT_URL, MOYSKLAD_URL.'/admin/attach/'.$retailstoreId);
-  curl_setopt($curl, CURLOPT_POST, true);    
+  curl_setopt($curl, CURLOPT_POST, true);
+  curl_setopt($curl, CURLOPT_POSTFIELDS, $headers);  
   $tmp = json_decode(curl_exec($curl), true);    
   curl_close($curl);
   return $tmp;
@@ -47,15 +48,22 @@ function MoySklad_GetRetailstoreToken($retailstoreId='') {
     // возвращает массив 'cbId' => ID КБ, 'moyskladId' => ID МойСклад
 	// https://online.moysklad.ru/api/posap/1.0/doc/index.html#pos_doc-%D0%BE%D0%BF%D0%B5%D1%80%D0%B0%D1%86%D0%B8%D0%B8-%D1%81%D0%BE-%D1%81%D0%BC%D0%B5%D0%BD%D0%B0%D0%BC%D0%B8-%D0%BE%D1%82%D0%BA%D1%80%D1%8B%D1%82%D1%8C-%D1%81%D0%BC%D0%B5%D0%BD%D1%83
 function MoySklad_OpenShift($tmp='',$retailstoreId='') {
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }  
+  if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
     // ищем статус последней открытой смены
-  $row = sql_fetch_assoc(data_select_field(SHIFTS_FIELD_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage, f'.SHIFTS_FIELD_SYNCID.' AS syncId', "status=0 AND f".SHIFTS_FIELD_SYNCID."!='' AND f".SHIFTS_FIELD_DATE." LIKE '".date("Y-m-d ")."%' ORDER BY add_time DESC LIMIT 1"));
+  $row = sql_fetch_assoc(data_select_field(SHIFTS_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage, f'.SHIFTS_FIELD_SYNCID.' AS syncId', "status=0 AND f".SHIFTS_FIELD_SYNCID."!='' AND f".SHIFTS_FIELD_DATE." LIKE '".date("Y-m-d ")."%' ORDER BY add_time DESC LIMIT 1"));
   if ('открыта'==$row['stage']) return array('cbId'=>$row['id'], 'moyskladId'=>$row['syncId']);    
   $syncId = MakeRandom('syncId');    // syncId смены
     // ищем текущий статус смены по этой кассе
-  $row = sql_fetch_assoc(data_select_field(SHIFTS_FIELD_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage', "status=0 AND f".SHIFTS_FIELD_SYNCID."='".$syncId."' ORDER BY add_time DESC LIMIT 1"));
+  $row = sql_fetch_assoc(data_select_field(SHIFTS_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage', "status=0 AND f".SHIFTS_FIELD_SYNCID."='".$syncId."' ORDER BY add_time DESC LIMIT 1"));
   if ('открыта'==$row['stage']) return array('cbId'=>$row['id'], 'moyskladId'=>$syncId);
   if ($row['id'] && !$row['stage']) $shiftId = $row['id'];
-  else $shiftId = data_insert(SHIFTS_FIELD_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_SYNCID=>$syncId));
+  else $shiftId = data_insert(SHIFTS_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_SYNCID=>$syncId));
     // выполняем запрос к МойСклад, в случае успеха обновляем статус записи $shiftId
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
   if (!$tmp['token'] || !$tmp['uid']) return false;
@@ -73,7 +81,7 @@ function MoySklad_OpenShift($tmp='',$retailstoreId='') {
   curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($data));
   $response = curl_exec($curl);
   $r = explode("\r\n", $response);
-  if (false!==strpos($r[0], 'HTTP/1.1 204')) data_update(SHIFTS_FIELD_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_STAGE=>'открыта'), "id='".$shiftId."' AND f".SHIFTS_FIELD_STAGE."!='открыта' LIMIT 1");
+  if (false!==strpos($r[0], 'HTTP/1.1 204')) data_update(SHIFTS_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_STAGE=>'открыта'), "id='".$shiftId."' AND f".SHIFTS_FIELD_STAGE."!='открыта' LIMIT 1");
   curl_close($curl);
   return array('cbId'=>$shiftId, 'moyskladId'=>$syncId);
 }
@@ -82,14 +90,21 @@ function MoySklad_OpenShift($tmp='',$retailstoreId='') {
     // закрытие смены $syncId торговой точки $retailstoreId, возвращает результат закрытия
 	// https://online.moysklad.ru/api/posap/1.0/doc/index.html#pos_doc-%D0%BE%D0%BF%D0%B5%D1%80%D0%B0%D1%86%D0%B8%D0%B8-%D1%81%D0%BE-%D1%81%D0%BC%D0%B5%D0%BD%D0%B0%D0%BC%D0%B8-%D0%B7%D0%B0%D0%BA%D1%80%D1%8B%D1%82%D1%8C-%D1%81%D0%BC%D0%B5%D0%BD%D1%83
 function MoySklad_CloseShift($tmp='',$retailstoreId='',$syncId='') {
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }  
+  if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);  
     // если $syncId не передан, ищем в КБ по последней открытой смене
   if (!$syncId) {
-    $row = sql_fetch_assoc(data_select_field(SHIFTS_FIELD_TABLE, 'f'.SHIFTS_FIELD_SYNCID.' AS syncId', "status=0 AND f".SHIFTS_FIELD_SYNCID."!='' AND f".SHIFTS_FIELD_STAGE."='открыта' AND f".SHIFTS_FIELD_DATE." LIKE '".date("Y-m-d ")."%' ORDER BY add_time DESC LIMIT 1"));
+    $row = sql_fetch_assoc(data_select_field(SHIFTS_TABLE, 'f'.SHIFTS_FIELD_SYNCID.' AS syncId', "status=0 AND f".SHIFTS_FIELD_SYNCID."!='' AND f".SHIFTS_FIELD_STAGE."='открыта' AND f".SHIFTS_FIELD_DATE." LIKE '".date("Y-m-d ")."%' ORDER BY add_time DESC LIMIT 1"));
     if ($row['syncId']) $syncId = $row['syncId'];
     else return false;   
   }
     // ищем текущий статус смены по этой кассе
-  $row = sql_fetch_assoc(data_select_field(SHIFTS_FIELD_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage', "status=0 AND f".SHIFTS_FIELD_SYNCID."='".$syncId."' ORDER BY add_time DESC LIMIT 1"));
+  $row = sql_fetch_assoc(data_select_field(SHIFTS_TABLE, 'id, f'.SHIFTS_FIELD_STAGE.' AS stage', "status=0 AND f".SHIFTS_FIELD_SYNCID."='".$syncId."' ORDER BY add_time DESC LIMIT 1"));
   if ('закрыта'==$row['stage']) return true;
     // выполняем запрос к МойСклад, в случае успеха обновляем статус записи $shiftId
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
@@ -107,7 +122,7 @@ function MoySklad_CloseShift($tmp='',$retailstoreId='',$syncId='') {
   curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($data));
   $response = curl_exec($curl);
   $r = explode("\r\n", $response);
-  if (false!==strpos($r[0], 'HTTP/1.1 204')) data_update(SHIFTS_FIELD_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_STAGE=>'закрыта'), "id='".$row['id']."' LIMIT 1");
+  if (false!==strpos($r[0], 'HTTP/1.1 204')) data_update(SHIFTS_TABLE, EVENTS_ENABLE, array('f'.SHIFTS_FIELD_STAGE=>'закрыта'), "id='".$row['id']."' LIMIT 1");
   curl_close($curl);
   return $response;
 }
@@ -116,8 +131,14 @@ function MoySklad_CloseShift($tmp='',$retailstoreId='',$syncId='') {
     // получение списка товаров
 	// https://online.moysklad.ru/api/posap/1.0/doc/index.html#pos_data-%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D1%8B-%D0%B8-%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8-%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D1%8B-%D0%B8-%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8
 function MoySklad_GetAssortment($tmp='',$retailstoreId='') {
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
-  if (!$tmp['token'] || !$tmp['uid']) return false;
+    // запрос к МойСклад
   $headers = array('Content-Type: application/json', 'Lognex-Pos-Auth-Token: '.$tmp['token'], 'Lognex-Pos-Auth-Cashier-Uid: '.$tmp['uid']);
   $curl = curl_init();
   curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
@@ -132,8 +153,14 @@ function MoySklad_GetAssortment($tmp='',$retailstoreId='') {
     // получение id товара из МойСклад по названию, признак $toCreate (bool) - создавать ли новый
 function MoySklad_GetProductId( $tmp='',$retailstoreId='',$productName='',$toCreate=false) {
   if (!$productName) return false;
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }  
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
-  if (!$tmp['token'] || !$tmp['uid']) return false;
+    // поулчаем полный список товаров
   $assortment = MoySklad_GetAssortment($tmp,$retailstoreId);
   foreach ($assortment['rows'] as $product) if ($product['name']==$productName) return $product['id'];
   if ($toCreate) return MoySklad_CreateProduct($tmp, $retailstoreId, $productName);
@@ -145,9 +172,16 @@ function MoySklad_GetProductId( $tmp='',$retailstoreId='',$productName='',$toCre
 	// https://online.moysklad.ru/api/posap/1.0/doc/index.html#pos_stuff-%D1%81%D0%BE%D0%B7%D0%B4%D0%B0%D0%BD%D0%B8%D0%B5-%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D0%BE%D0%B2-%D1%81%D0%BE%D0%B7%D0%B4%D0%B0%D0%BD%D0%B8%D0%B5-%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D0%B0
 function MoySklad_CreateProduct($tmp='',$retailstoreId='',$productName='',$price=0) {
   if (!$productName) return false;    
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }  
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
-  if (!$tmp['token'] || !$tmp['uid']) return false;
+    // сначала пробуем получить из списка уже имеющихся товаров
   if ($u=MoySklad_GetProductId($tmp,$retailstoreId,$productName)) return $u;
+    // создаём новый, если не нашли по названию
   $headers = array('Content-Type: application/json', 'Lognex-Pos-Auth-Token: '.$tmp['token'], 'Lognex-Pos-Auth-Cashier-Uid: '.$tmp['uid']);
   $data = '';    
   $data['name'] = $productName;
@@ -170,10 +204,16 @@ function MoySklad_CreateProduct($tmp='',$retailstoreId='',$productName='',$price
     // создание продажи (упрощённое)
     // возвращает массив ID КБ и ID МойСклад
 	// https://online.moysklad.ru/api/posap/1.0/doc/index.html#pos_doc-%D0%BF%D1%80%D0%BE%D0%B4%D0%B0%D0%B6%D0%B8-%D0%BF%D1%80%D0%BE%D0%B4%D0%B0%D0%B6%D0%B8-%D0%B2-%D1%81%D0%BC%D0%B5%D0%BD%D0%B5
-function MoySklad_CreateSale($tmp='',$retailstoreId='',$saleId=0,$price=0,$cashSum=0,$noCashSum=0,$phone='',$email='',$product='') {
+function MoySklad_CreateSale($tmp='',$retailstoreId='',$saleId=0,$product='',$price=0,$cashSum=0,$phone='',$email='') {
   if (!$saleId || !$price || !$product) return false;
+    // если нет входных данных, запрашиваем снова
+  if (!$retailstoreId) {
+	$stores = MoySklad_GetRetailstores();
+	if ($retailstoreId=$stores['rows'][0]['id']) 1;
+	else return false;
+  }
   if (!$tmp) $tmp = MoySklad_GetRetailstoreToken($retailstoreId);
-  if (!$tmp['token'] || !$tmp['uid']) return false;
+    // создаём новую продажу
   $headers = array('Content-Type: application/json', 'Lognex-Pos-Auth-Token: '.$tmp['token'], 'Lognex-Pos-Auth-Cashier-Uid: '.$tmp['uid']);
   $data = '';
   $syncId = MakeRandom('syncId');    // syncId продажи
